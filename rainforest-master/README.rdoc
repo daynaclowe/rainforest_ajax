@@ -1,28 +1,306 @@
 == README
 
-This README would normally document whatever steps are necessary to get the
-application up and running.
 
-Things you may want to cover:
+Intro
 
-* Ruby version
+So far, we've learned that if you want to add functionality on your web pages without making another HTTP request to your server for a whole new page, you can use JavaScript. But what if you want to do something within a web page that uses information you don't have on that page, but does exist on the server?
 
-* System dependencies
+There is a JavaScript object for that, called XMLHttpRequest (aka XHR), which, despite the name, can be used to retrieve any data, not just XML. It allows you to make a request to a server and handle the response using JavaScript. It's similar to retrieving a file in Ruby, but with an important difference.
 
-* Configuration
+Example of a Ruby external HTTP request for a file:
 
-* Database creation
+require 'open-uri'
+page = open("http://www.example.com/file")
+puts "hello"
+puts page
 
-* Database initialization
+If the page takes 30 seconds to download the file, then it will take 30 second before "hello" is output. Retrieving a file like this in Ruby is known as a synchronous method (everything happens in order; it will wait for the previous statement to complete before continuing on to the next). Retrieving files in JavaScript is (typically) the opposite, it's asynchronous. Now you know what the first "A" in AJAX stands for (The whole acronym stands for Asynchronous Javascript and XML and it refers to a set of tools, not just the XHR object).
 
-* How to run the test suite
+When something is asynchronous, it means that the interpreter (in this case, a web browser) begins the operation, but continues on to the next line of code without waiting for the operation to finish. The reason this is important is that when we send a request to a remote web server, we have no idea how long it'll take to return the results. If we sit around waiting, from the user's perspective, it'll look like everything is frozen. Not good.
 
-* Services (job queues, cache servers, search engines, etc.)
+In this example we GET the list of products from the LCBO API and display its contents inside a <pre> tag on our page.
 
-* Deployment instructions
+Here is the raw result from the LCBO Products API:
+<pre id="products"></pre>
+<script type="text/javascript">
+    function display_products() {
+                // readyState === 4 means that the asynchronous request completed successfully
+        if (this.readyState === 4) {
+            document.getElementById('products').innerHTML = this.responseText;
+        }
+    }
+    var xhr = new XMLHttpRequest();
+    xhr.onload = display_products;
+    xhr.open('GET', 'http://www.lcboapi.com/products.json', true);
+    xhr.send();
+    alert('hello');
+</script>
 
-* ...
+(Note: this code is shown as an example only and won't actually work because our browser won't allow access to to different hosts, like the lcboapi.com server. See Same-origin policy)
 
+The return value of the request to the API will be a JSON object (as you may recall). Here we're just dumping it in it's entirety onto our page.
 
-Please feel free to use a different markup language if you do not plan to run
-<tt>rake doc:app</tt>.
+When we get to the .send() line, the asynchronous request begins, then the browser immediately runs the next line and a "hello" alert pops up. Later on, when the file finishes downloading, it will call the display_products method that was specified by .onload, where it will be available via the "this" object.
+
+XMLHttpRequest can be a pain; the jQuery methods are much nicer, but do the same thing:
+
+Here is the raw result from the LCBO Products API:
+<pre id="products"></pre>
+<script type="text/javascript">
+    function display_products(response) {
+        $('#products').text(response);
+    }
+    $.get('http://www.lcboapi.com/products.json', display_products);
+</script>
+
+This example uses jQuery's .get method. There is actually a generic .ajax method, which .get calls, although you can always call .ajax directly. Read the jQuery docs for details, of course.
+
+Oh, and in case you were wondering, the remaining "AX" stands for "and XML," which as you already know, is a poor name; nowadays JSON is generally the preferred format. Also, you can do synchronous requests in JavaScript as well.
+Unobtrusive JavaScript
+
+Best practices for JavaScript today is to use unobtrusive JavaScript, which means not writing it “inline” within your HTML tags. Instead, you should neatly separate your presentation code from your JavaScript logic. The following examples illustrate the differences:
+
+The simple way to add an action on a click event (obtrusive):
+
+<a href="/" id="my-link" onClick="alert('Someone clicked me!');">My Link</a>
+
+The unobtrusive way to do the same thing:
+
+<a href="/" id="my-link" data-message="Someone clicked me!">My Link</a>
+
+<script>
+    $( "#my-link" ).click(function() {
+        alert($(this).data("message"));
+    });
+</script>
+
+In the second example, the JavaScript code is neatly separated from the presentation code. We use a data attribute on our HTML tag to specify any data which we may want to access via JavaScript. If you haven't seen them already, data attributes were introduced in HTML5, and you can name the attributes data-whateveryouwant.
+
+More on data attributes
+Implementing an AJAX search
+
+Before we start with an AJAX search, let's build a regular Rails search first and we'll "ajax-ify" it!
+
+First off, we'll need to add a search form to the index page. Given that this form won't be generated from a certain ActiveRecord model, we can use a form_tag helper at the top of the page.
+
+app/views/products/index.html.erb
+
+<%= form_tag products_path, method: :get, authentication: false, id: 'search-form' do %>
+  <%= text_field_tag :search, params[:search] %>
+  <%= submit_tag "Search" %>
+<% end %>
+
+<div id="products">
+  <%= render @products %>
+</div>
+
+This form will create a GET request to our index action on our ProductsController.
+
+In this view there's also a products listing that's making use of a partial. If you haven't already moved your product listings to a partial, now is a good time to try creating a _product.html.erb partial via render @products. (Check out this Rails Guides section for more details)
+
+In the ProductsController, the index action now needs to contain code to handle a search param and match a product name.
+
+app/controllers/products_controller.rb
+
+class ProductsController < ApplicationController
+  ...
+  def index
+    @products = if params[:search]
+      Product.where("LOWER(name) LIKE LOWER(?)", "%#{params[:search]}%")
+    else
+      Product.all
+    end
+  end
+  ...
+end
+
+See commits 2e7b427 and 8190572
+
+The goal of the following tutorial is to implement this search function using AJAX instead. That means that every time we submit the search form, it won't fully refresh the page - JavaScript will be making the request in the background and handle the response and inserting it into the DOM!
+Using the XHR object
+
+To start, let's try and implement a plain JavaScript AJAX request. You won't see these very often (typically we use jQUery's variations of $.ajax instead). But if you try it out, you'll be able to at least recognize what it is and hopefully, how it works.
+
+Add your XHR request request in an inline <script> tag at the bottom of your ProductsController#index view. Though, this is not fully unobtrusive, it is fine for now. We'll be refactoring it soon enough.
+
+commit: ebfe261
+
+app/views/index.html.erb
+
+...
+<script type="text/javascript">
+  function display_search_results() {
+    // readyState === 4 means that the asynchronous request completed successfully
+    if (this.readyState === 4) {
+      console.log(this);
+      document.getElementById('products').innerHTML = this.responseText;
+    }
+  }
+
+  var form = document.getElementById('search-form');
+  form.addEventListener('submit', function(event) {
+    event.preventDefault();
+    var searchValue = document.getElementById('search').value;
+
+    var xhr = new XMLHttpRequest();
+    xhr.onload = display_search_results;
+    xhr.open('GET', '/products?search=' + searchValue, true);
+    xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+    xhr.send();
+  });
+</script>
+
+This block of code starts out with defining a function called display_search_results. As you can see, its definition is later on passed into xhr.onload where it will be used as a callback once the xhr request finishes.
+
+Following that definition, we set up a variable for the form element and set up a submit listener on it. Inside this listener we define a callback that creates the AJAX request with a XMLHTTPRequest (or XHR for short) object.
+
+So far, this means that when someone submits the form, it will submit an AJAX request. Once that AJAX request succeeds, it will "call back" to display_search_results and update the HTML in the browser.
+
+xhr.open lets us define:
+
+    request type (ie GET, POST, etc)
+    target URL for the request
+    and finally, true to define this call as asynchronous
+
+Instead of rendering the entire page, this action is just rendering the part that we need: the partial. As you can see in the display_search_results function, if all goes well, we can replace this new response html with the existing one. It'll look almost seamless to the user!
+
+Don't forget that the display_search_results callback is asynchronous, which means that it will happen whenever our request returns and not necessarily in the same order as the code is laid out.
+
+If you try your request out now, what happens? Your page should look a little odd, like we just reinserted another page inside our page. Clearly, we need to fix something.
+
+When it comes to AJAX requests for HTML, we don't typically return the entire page back because we have most of that page already. The server should return us just a bit of HTML that we will then insert in the DOM with JavaScript.
+
+In order to do that, we need to set up our controller to figure out when we're getting an AJAX request instead of a regular HTTP request and return partial data instead of the whole page.
+
+Update your ProductsController#index to respond to AJAX:
+
+app/controllers/products_controller.rb
+
+  def index
+    @products = if params[:search]
+      Product.where("LOWER(name) LIKE LOWER(?)", "%#{params[:search]}%")
+    else
+      Product.all
+    end
+
+    if request.xhr?
+      render @products
+    end
+  end
+
+Rails knows that it's an AJAX request, thanks to a special header (X-Requested-With=XMLHTTPRequest) that gets passed in with every request. This makes a special method available to us that can be checked within a controller called request.xhr?. Since we know it's AJAX, we can choose to just render the products partial instead of the whole page.
+
+Try making a search request now and you'll see that it only updates a little part of the page!
+jQuery $.ajax
+
+Commit: 666194c
+
+Before we start porting our vanilla JS AJAX request to jQuery, let's start by moving it to app/assets/javascripts/products.js
+
+$(document).on('ready page:load', function() {
+  // put your javascript here
+});
+
+(If you have a products.js.coffee file in your assets, just rename it to products.js. We won't be using coffeescript)
+
+You could place this code in any file you want, but the Rails convention is to add the javascript related to any ProductsController actions inside of products.js. However, all the JS files get loaded on every request no matter which controller you're in, so be mindful of that.
+
+We use $(document).on('ready page:load', ...) in order to ensure that the entire DOM is loaded before we begin selecting and setting up listeners.
+
+Next up, let's port over to jQuery!
+
+Commit: 1641c9a
+
+app/assets/javascripts/products.js
+
+$(document).on('ready page:load', function() {
+  $('#search-form').submit(function(event) {
+    event.preventDefault();
+    var searchValue = $('#search').val();
+
+    $.ajax({
+      url: '/products?search=' + searchValue,
+      type: 'GET',
+      dataType: 'html'
+    }).done(function(data){
+      $('#products').html(data);
+    });
+  });
+});
+
+This code does the exact same thing as the previous version. $.ajax() is the general function that's available and it can take in many different options and settings. Here are the docs to $.ajax.
+
+We set up the url, type and dataType options in this example. They tell the server where, with what HTTP method and which data type we'd like as a response (it can be "html", "script", "json", etc).
+
+After the $.ajax call, we can define different callbacks to handle the response depending on the situation. There's .done() for successful responses, .fail() for failed responses, and .always() will run in both situations. You can chain these, so that you can handle different cases.
+
+Once you have this working, let's do some more refactoring.
+$.get() shorthand
+
+commit: 6770ab3
+
+jQuery's $.ajax() has multiple shorthand methods, which allow us to save on passing in additional properties by using good defaults.
+
+Let's replace our previous $.ajax() function with the $.get() shorthand.
+
+app/assets/javascripts/products.js
+
+  ...
+    // inside the submit event callback, replace the $.ajax portion with the following
+    $.get('/products?search=' + searchValue)
+      .done(function(data){
+        console.log(data);
+        $('#products').html(data);
+      });
+  ...
+
+Using $.get doesn't require anything but the url, since the 'GET' request method and the data type we're looking for are the defaults of this function. This lets us write less code!
+
+Even though we're now using a different function, your app should work just the same as it did previously.
+Using $.getScript()
+
+Commit: dadaa8f
+
+$.getScript() is another shorthand function that you can use. Instead of using the data type "string" or "html", it uses "script". This means it's expecting a "script" as a response. Once it gets that response, it will execute the script. That means we no longer need to have a callback, the script acts as a callback.
+
+app/assets/javascripts/products.js
+
+...
+    // inside the submit event callback, replace the $.get portion with the following
+    $.getScript('/products?search=' + searchValue);
+...
+
+Since $.getScript is requesting something with the data type "script", the server needs to be able to respond to that data type. In order to get that to work, our controller can use respond_to generate different responses for different request types.
+
+app/controllers/products_controller.rb
+
+  def index
+    @products = if params[:search]
+      Product.where("LOWER(name) LIKE LOWER(?)", "%#{params[:search]}%")
+    else
+      Product.all
+    end
+
+    respond_to do |format|
+      format.html
+      format.js
+    end
+  end
+
+Now this controller responds to both html and js requests. Unless otherwise noted, when it comes to JS responses, it looks for a view template just as it does with HTML, except it'll look for index.js.erb instead of index.html.erb.
+
+Let's create that template:
+
+app/views/products/index.js.erb
+
+$('#products').html("<%= escape_javascript(render @products) %>");
+
+Inside the template, we add javascript and erb. The erb portion gets interpreted first, therefore allowing you to generate responses that are partially html or strings. escape_javascript takes care of ensuring there are no issues with formatting by the time it gets executed as JS. escape_javascript can also be represented as j
+
+app/views/products/index.js.erb
+
+$('#products').html("<%= j(render @products) %>");
+
+Now this JS+erb view template does the exact same thing our .done() callback used to. Once Rails builds up this responds and it gets returned to the browser, the $.getScript() ajax function will run it as a callback.
+
+And with that, all those simple changes now allow us to now create a very simple AJAX to run a search without ever having to refresh the page. Go Ajax!
