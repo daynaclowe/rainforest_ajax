@@ -1,27 +1,35 @@
 <h1>Listing products</h1>
+
+<%= link_to "Add a product", new_product_path %>
+<div><small><%= page_entries_info @products %></small></div>
+
+<br/>
 <%= form_tag products_path, method: :get, authentication: false, id: 'search-form' do %>
   <%= text_field_tag :search, params[:search] %>
   <%= submit_tag "Search" %>
 <% end %>
+<br/>
 
-<table>
-  <tr>
-    <th>Name</th>
-    <th>Description</th>
-    <th>Price in Cents</th>
-    <th></th>
-    <th></th>
-    <th></th>
-  </tr>
-  <%= render partial: @products %>
+<div>
+  <table>
+    <tr>
+      <th>Name</th>
+      <th>Description</th>
+      <th>Price in Cents</th>
+    </tr>
+  </table>
+  <div id="products">
+    <%= render @products %>
+  </div>
 
-</table>
 
-<div id="products">
 </div>
+
+
 
 
 <br />
 
 <%= link_to 'New Product', new_product_path %>
 
+<%= paginate @products %>
